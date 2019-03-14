@@ -1,0 +1,191 @@
+---
+title: "BackTesting2018_monthly_sharperatio"
+output: html_document
+---
+
+
+```{r message=FALSE, warning=FALSE}
+#Find the best 10 companies with the highest sharpe ratio in S&P 100
+library(quantmod)
+#portfolio from 2018-01-01 until 2018-12-31
+TickerList <- read.csv(file.choose(), header =TRUE) # choose the file that the data is stored
+data = '2017-12-01' #choosing the starting date , we choose a starting date one month back so we calculate sharpe ratio everytime with one months data of data
+AllTopTickers <- NULL
+
+for (j in 1:12) {    # for loop for months
+TickerList.2018 <- paste(TickerList[1:100,j], sep = "") # Choose S&P 100
+
+ClosingPricesRead <- NULL #Find the adjusted prices for each company in S&P 100
+for (Ticker in TickerList.2018){
+  ClosingPricesRead <- cbind(ClosingPricesRead,
+                             getSymbols(Ticker, from=data, verbose=FALSE, auto.assign=FALSE)[,6]) # [,6] = keep the adjusted prices
+}
+a <- (j-1)*21 # each month has 21 trading days ( there is no trading in weekends)
+ClosingPricesRead2 <- ClosingPricesRead[(1+a):(21+a), 1:100]#adjusting each months intervals as months changes our interval starting date moves
+
+ #ClosingPrices <- ClosingPricesRead2[apply(ClosingPricesRead2,1,function(x) all(!is.na(x))),]
+
+Returns <- as.xts((tail(ClosingPricesRead2,-1) / as.numeric(head(ClosingPricesRead2,-1)))-1) #calculating the daily returns
+
+numtick <- length(TickerList.2018) #number of ticker we always be 100 
+
+TickerRet <- NULL
+TickerStd <- NULL 
+TickerSharpe <- NULL
+#Calculating Sharpe ratio based on the mean daily returns and their standard deviation
+for (i in 1:numtick){
+  TickerRet <- cbind(TickerRet, mean(Returns[,i])) 
+  TickerStd <- cbind(TickerStd, sd(as.numeric(Returns[,i])))
+  TickerSharpe <- cbind(TickerSharpe, (TickerRet[i]*252)/(TickerStd[i]*sqrt(252)))
+}
+
+TickerInfo <- t(rbind(TickerRet, TickerStd, TickerSharpe))
+
+rownames(TickerInfo) <- TickerList.2018
+colnames(TickerInfo) <- c("Mean", "StD", "Sharpe")
+
+TickerInfo <- as.data.frame(TickerInfo)
+TickerInfo <- TickerInfo[order(-TickerInfo$Sharpe),]
+TopTickerSharpe <- paste(rownames(head(TickerInfo, 10)), sep = "")
+
+AllTopTickers <- cbind(AllTopTickers, TopTickerSharpe) #creating a matrix with the tickers selected for each month ((10x12) matrix)
+print(AllTopTickers)# print everytime the best tickers for each month at the end of the loop to see the progress of the code since it takes a lot of time
+
+}
+```
+
+```{r message=FALSE, warning=FALSE}
+library(timeSeries)
+library(fPortfolio)
+
+Allocation.Matrix.2018 <- list() 
+Monthly.Stock.Returns.2018 <- list()
+End.Of.Month.Dates.2018 <- as.Date(c("2018-01-31", "2018-02-28", "2018-03-29", "2018-04-30", "2018-05-31", "2018-06-29", "2018-07-31", "2018-08-31", "2018-09-28", "2018-10-31", "2018-11-30","2018-12-31")) #manually choosing the last trading day of the month
+
+#using for loop we calculate each month the return and propotions of the stocks choosen
+for(j in 1:12){ #12 represents the months of the year
+
+TickerList <- AllTopTickers[,j]  #choosing the best tickers for each month individually
+
+ClosingPricesRead <- NULL
+for (Ticker in TickerList){  #Find the adjusted prices for each company in the top 10 tickers we choose
+  ClosingPricesRead <- cbind(ClosingPricesRead,
+                             getSymbols(Ticker, from=data, verbose=FALSE, auto.assign=FALSE)[,6]) # [,6] = keep the adjusted prices
+  
+}
+
+Monthly <- NULL
+#using for loop we create ererytime a matrix for the monthly returns for every ticker in the 10 stocks we choose in every state of j were j is the state of every month anf then select the date of the last traidng day of the month which is the monhly return of that stock
+for(k in 1:10) {
+  Monthly <- cbind(Monthly, monthlyReturn(ClosingPricesRead[,k])) # creating a matrix with all the monthly returns for each ticker
+}
+colnames(Monthly) <- TickerList
+Monthly.Stock.Returns.2018[[j]] <- Monthly[End.Of.Month.Dates.2018[j]] #select the return for the particular date we need
+
+a <- (j-1)*21# as j increases the the dates move forward for having the days in the particular month, the window stays the same
+ClosingPrices <- ClosingPricesRead[(1+a):(21+a), ] # choosing a gap of 21 days which is the number of trading days of each month
+
+returns <- as.timeSeries((tail(ClosingPrices,-1) / as.numeric(head(ClosingPrices,-1)))-1)#daily returns
+
+Frontier <- portfolioFrontier(returns)
+riskReturnPoints <- frontierPoints(Frontier) # get risk and return values for points on the efficient frontier
+annualizedPoints <- data.frame(targetRisk=riskReturnPoints[, "targetRisk"] * sqrt(252), targetReturn = riskReturnPoints[,"targetReturn"] * 252)
+
+riskFreeRate <- 0 #assume risk free rate is zero
+
+portfolioSharpeRatio <- (annualizedPoints[,"targetReturn"] - riskFreeRate)/annualizedPoints[,"targetRisk"]
+
+bestindex <- which(portfolioSharpeRatio==max(portfolioSharpeRatio))
+
+allocations <- getWeights(Frontier@portfolio) # get allocations for each instrument for each point on the efficient frontier
+colnames(allocations) <- TickerList
+
+Allocation.Matrix.2018[[j]] <- allocations[bestindex,]
+}
+
+Monthly.Net.Returns.2018 <- NULL
+#calculating the return of our portfolio for every month by mulpipling the porpotion of each stock by its return for the month
+for(m in 1:12){ 
+  Monthly.Stock.Net.Returns <- Allocation.Matrix.2018[[m]]*Monthly.Stock.Returns.2018[[m]]#calculating the return of our portfolio for every month by mulpipling the porpotion of each stock by its return for the month
+  Monthly.Net.Returns.2018[m] <- sum(Monthly.Stock.Net.Returns) + 1 #sum up all the Monthly.Stock.Net.Returns for every month and create a list for the portfolio returns for each month
+}
+
+Final.Wealth.Without.TC.2018 <- prod(Monthly.Net.Returns.2018)
+
+#multiplying the Monthly.Stock.Net.Returns of the portofolio we have the annual return of our portfolio
+#sharpe ratio with 2 years window return 0.99, 4 years back 0.94, 1 year back 0.918, monthly 1.20, 10 days window for choosing stock and monthly for choosing the best portfolio return 1.38
+```
+
+```{r setup, include=FALSE}
+
+Consecutive.Stocks.2018 <- list()
+# For each month, the list of tickers that appear in the previous month as well.
+
+for(j in 1:12) {
+# Supposed to be 11 since there is 11 pairs of consecutive months. But we did 12 so that if there is a NULL in the last pair of months it will still print NULL.
+  
+if(j == 12) {
+  Consecutive.Stocks.2018[[j+1]] <- 1
+  break
+}
+# For the 12th one, we assigned a dummy number (=1) so that a NULL will still show. This 12th element will not be used anywhere else   
+  
+p <- NULL
+for (i in 1:10) {
+  if(is.element(AllTopTickers[i,j],AllTopTickers[,(j+1)]) == TRUE){
+    p <- cbind(p, AllTopTickers[i,j])
+    
+}
+# For each of the 10 stocks, if it appears in the next month as well then it is added into consec
+Consecutive.Stocks.2018[[j+1]] <- p
+
+}
+}
+Consecutive.Stocks.2018 <- Consecutive.Stocks.2018[1:12]
+# Delete the dummy number from the list
+```
+
+```{r}
+Retained.Portfolio.Stocks <- rep(0, 12)
+# Proportion of stocks in the portfolio that are retained that will be excluded from transaction costs. This starts off empty.
+
+
+for (i in 1:12){
+  if (length(Consecutive.Stocks.2018[[i]]) > 0) { # If statement checks if there are retained stocks. length(...) is the number of stocks that are retained.
+    
+    c <- 0
+    for (j in 1:length(Consecutive.Stocks.2018[[i]])) {
+      b <- Consecutive.Stocks.2018[[(i)]][,j]
+      c <- c + min(Allocation.Matrix.2018[[(i-1)]][b],Allocation.Matrix.2018[[(i)]][b])
+    }
+    # min is the proportion of the stocks that are not bought or sold and hence transaction costs are not relevant for     that proportion of stocks.
+    # At the end c will be the total proportion of stocks not bought or sold between the consecutive months.
+  
+    Retained.Portfolio.Stocks[i] <- c
+  } 
+}
+
+```
+
+```{r}
+W.2018 = 1
+
+for (i in 1:12){
+  W.2018 = (W.2018*(1-Retained.Portfolio.Stocks[i])*0.9911 + W.2018*Retained.Portfolio.Stocks[i]) * Monthly.Net.Returns.2018[i]
+  # (a + b)*c
+  # a = Wealth times proportion of stocks bought/sold times (1 - transaction costs).
+  # Transaction costs = 0.89 % or 0.0089
+  # b = Wealth times proportion of stocks not bought/sold, hence no transaction costs.
+  # c = R
+  
+}
+
+Final.Wealth.2018 <- W.2018
+
+print(Final.Wealth.2018)
+# Final Wealth for 2018 including transaction costs.
+```
+
+
+
+

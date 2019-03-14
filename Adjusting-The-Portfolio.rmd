@@ -1,0 +1,237 @@
+---
+title: "Untitled"
+output: html_document
+---
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+suppressPackageStartupMessages(require(timeSeries))
+suppressPackageStartupMessages(require(fPortfolio)) # may also require installing the package require(slam)
+suppressPackageStartupMessages(require(quantmod))
+suppressPackageStartupMessages(require(tidyquant))
+suppressPackageStartupMessages(require(XLConnect))
+suppressPackageStartupMessages(require(readr))
+```
+
+```{r}
+library(quantmod)
+
+Monthly.Return.Latest <- NULL
+#using for loop we create ererytime a matrix for the monthly returns for every ticker in the 10 stocks we choose in every state of j were j is the state of every month anf then select the date of the last traidng day of the month which is the monhly return of that stock
+for(k in 1:10) {
+  Monthly.Return.Latest <- cbind(Monthly.Return.Latest, monthlyReturn(ClosingPricesRead[,k])) # creating a matrix with all the monthly returns for each ticker
+}
+colnames(Monthly.Return.Latest) <- TickerList.New
+Stock.Monthly.Return <- tail(Monthly.Return.Latest,1) #select the return for the particular date we need
+
+Proportionate.Monthly.Return <- Stock.Monthly.Return*Allocation.New
+
+Portfolio.Investment <- (sum(Proportionate.Monthly.Return) + 1)*Portfolio.Investment
+
+Wealth <- Portfolio.Investment
+# Wealth in proportion
+
+print(Wealth)
+```
+
+```{r}
+TickerList.Old <- TickerList.New
+Allocation.Old <- Allocation.New
+```
+
+```{r message=FALSE, warning=FALSE}
+library(tidyquant)
+a <- tq_index("SP500") 
+
+TickerList.Latest <- a[1:150,1]
+
+# Latest S&P 150. 150 so that we can check in the code for errors about tickers.
+```
+
+```{r message=FALSE, warning=FALSE}
+library(quantmod)
+
+
+Error.Check <- lapply(TickerList.Latest, function(x){try(getSymbols(x),silent=TRUE)})
+# This checks for each ticker if there is an error and prints a list of 150 with the ticker or an error message.
+
+TickerList4 <- NULL
+counter = 1
+for (i in 1:150) {
+  if(Error.Check[[i]] == TickerList.Latest[i]) {
+  TickerList4[counter] <- TickerList.Latest[i]
+  counter = counter + 1
+  }
+  
+}
+# Creating a new list without the tickers that has errors
+
+TickerList4 <- TickerList4[1:100]
+# S&P 100
+```
+
+```{r}
+
+currentDate <- Sys.Date()
+# Latest date
+
+sopm <- currentDate - days(day(currentDate))
+date <- sopm - days(day(sopm) - 1)
+# First day of the previous month
+
+ClosingPricesRead <- NULL
+for (Ticker in TickerList4){
+  
+  ClosingPricesRead <- cbind(ClosingPricesRead, getSymbols(Ticker, from=date, verbose=FALSE, auto.assign=FALSE)[,6])
+
+}
+# Adjusted closing prices for the last month.
+
+
+
+# ClosingPricesRead <- tail(ClosingPricesRead,10)
+# If we want to calculate sharpe ratio for the last 10 days we'll use the line above.
+
+```
+
+```{r}
+Returns <- as.xts((tail(ClosingPricesRead,-1) / as.numeric(head(ClosingPricesRead,-1)))-1)
+# Daily returns
+```
+
+```{r}
+numtick <- length(TickerList4)
+
+TickerRet <- NULL
+TickerStd <- NULL 
+TickerSharpe <- NULL
+
+for (i in 1:numtick){
+  TickerRet <- cbind(TickerRet, mean(Returns[,i]))
+  TickerStd <- cbind(TickerStd, sd(as.numeric(Returns[,i])))
+  TickerSharpe <- cbind(TickerSharpe, (TickerRet[i]*252)/(TickerStd[i]*sqrt(252)))
+                        }
+```
+
+```{r}
+TickerInfo <- t(rbind(TickerRet, TickerStd, TickerSharpe))
+
+rownames(TickerInfo) <- TickerList4
+colnames(TickerInfo) <- c("Mean", "StD", "Sharpe")
+```
+
+```{r}
+TickerInfo <- as.data.frame(TickerInfo)
+TickerInfo <- TickerInfo[order(-TickerInfo$Sharpe),]
+TopTickerSharpe <- paste(rownames(head(TickerInfo, 10)), sep = "")
+print(TopTickerSharpe)
+
+```
+
+```{r}
+TickerList.New <- TopTickerSharpe
+```
+# read closing prices from Yahoo keeping only the closing prices
+```{r}
+ClosingPricesRead <- NULL
+for (Ticker in TickerList.New){
+  ClosingPricesRead <- cbind(ClosingPricesRead,
+                             getSymbols(Ticker, from=date, verbose=FALSE, auto.assign=FALSE)[,6]) # [,6] = keep the adjusted prices
+}
+```
+# keep only the dates that have closing prices for all tickers
+```{r}
+ClosingPrices <- ClosingPricesRead[apply(ClosingPricesRead,1,function(x) all(!is.na(x))),]
+```
+# convert prices to daily returns
+```{r}
+library(timeSeries)
+
+returns <- as.timeSeries((tail(ClosingPrices,-1) / as.numeric(head(ClosingPrices,-1)))-1)
+```
+# calculate the efficient frontier
+```{r}
+library(fPortfolio)
+
+Frontier <- portfolioFrontier(returns)
+```
+
+```{r}
+plot(Frontier,1) # can also call the plot routine so it only plots the frontier: plot(Frontier,1)
+```
+
+# execute the next commands to plot annualized returns and risk
+# convert from daily to annual returns and risk for points on the efficient frontier
+
+```{r}
+riskReturnPoints <- frontierPoints(Frontier) # get risk and return values for points on the efficient frontier
+annualizedPoints <- data.frame(targetRisk=riskReturnPoints[, "targetRisk"] * sqrt(252),
+                               targetReturn=riskReturnPoints[,"targetReturn"] * 252)
+```
+# plot Sharpe ratios for each point on the efficient frontier
+```{r}
+riskFreeRate <- 0
+plot((annualizedPoints[,"targetReturn"] - riskFreeRate) / annualizedPoints[,"targetRisk"], xlab="point on efficient frontier", ylab="Sharpe ratio")
+```
+
+```{r}
+portfolioSharpeRatio <- (annualizedPoints[,"targetReturn"] - riskFreeRate)/annualizedPoints[,"targetRisk"]
+
+bestindex <- which(portfolioSharpeRatio==max(portfolioSharpeRatio))
+```
+# plot the allocation to each stock for each point on the efficient frontier
+# weightsPlot(Frontier)
+```{r}
+allocations <- getWeights(Frontier@portfolio) # get allocations for each instrument for each point on the efficient frontier
+colnames(allocations) <- TickerList.New
+barplot(t(allocations), col=rainbow(ncol(allocations)+2), legend=colnames(allocations), names.arg = c(1:50))
+```
+# final decision of allocations with target return and target volatility
+```{r}
+
+Allocation.New <- allocations[bestindex,]
+
+Allocation.New
+```
+
+```{r setup, include=FALSE}
+
+Consecutive.Stocks.Latest <- NULL
+
+for(i in 1:10){
+  if(is.element(TickerList.Old[i],TickerList.New) == TRUE){
+    Consecutive.Stocks.Latest <- cbind(Consecutive.Stocks.Latest,TickerList.Old[i])
+  }
+}
+
+```
+
+```{r}
+c <- 0
+
+  if (length(Consecutive.Stocks.Latest) > 0) { # If statement checks if there are retained stocks. length(...) is the number of stocks that are retained.
+    
+    
+    for (j in 1:length(Consecutive.Stocks.Latest)) {
+      b <- Consecutive.Stocks.Latest[j]
+      c <- c + min(Allocation.Old[b],Allocation.New[b])
+    }
+    # min is the proportion of the stocks that are not bought or sold and hence transaction costs are not relevant for     that proportion of stocks.
+    # At the end c will be the total proportion of stocks not bought or sold between the consecutive months.
+  
+
+  } 
+
+Retained.Portfolio.Stocks.Latest <- c
+```
+
+```{r}
+
+Wealth <- Wealth*(1-Retained.Portfolio.Stocks.Latest)*0.9911 + Wealth*Retained.Portfolio.Stocks.Latest
+
+  # a + b
+  # a = Wealth times proportion of stocks bought/sold times (1 - transaction costs).
+  # Transaction costs = 0.89 % or 0.0089
+  # b = Wealth times proportion of stocks not bought/sold, hence no transaction costs.
+
+print(Wealth)
+```
